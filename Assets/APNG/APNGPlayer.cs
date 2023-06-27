@@ -454,11 +454,11 @@ public class APNGPlayer : MonoBehaviour
             Debug.LogWarning("This player is not ready, can't call Play() method.");
             return;
         }
-        if (materials.Count == 0 && rawImages.Count == 0)
-        {
-            Debug.LogWarning("The materials and rawImages count is 0, can't call Play() method.");
-            return;
-        }
+        //if (materials.Count == 0 && rawImages.Count == 0)
+        //{
+        //    Debug.LogWarning("The materials and rawImages count is 0, can't call Play() method.");
+        //    return;
+        //}
         if (isPlaying)
             return;
         if (mCurrentFrameIndex == -1)
