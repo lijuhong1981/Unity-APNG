@@ -203,7 +203,7 @@ public class APNGPlayer : MonoBehaviour
     public ImageSource imageSource;
     [Tooltip("指定APNG图像所需要赋值的Material")]
     public List<Material> materials = new List<Material>();
-    [Tooltip("执行APNG图像所需要赋值的RawImage")]
+    [Tooltip("指定APNG图像所需要赋值的RawImage")]
     public List<RawImage> rawImages = new List<RawImage>();
     [Tooltip("是否随脚本启动执行")]
     public bool runOnStart = true;
@@ -281,7 +281,7 @@ public class APNGPlayer : MonoBehaviour
 
     public delegate void OnReady(APNGPlayer player);
 
-    public delegate void OnError(string error);
+    public delegate void OnError(APNGPlayer player, string error);
 
     public event OnReady onReady;
     public event OnError onError;
@@ -338,7 +338,7 @@ public class APNGPlayer : MonoBehaviour
                 string error = "Get " + imagePath + " error: " + www.error;
                 Debug.LogError(error);
                 mLoadState = LoadState.ERROR;
-                onError?.Invoke(error);
+                onError?.Invoke(this, error);
                 yield break;
             }
 
@@ -354,7 +354,7 @@ public class APNGPlayer : MonoBehaviour
             {
                 Debug.LogError(e.Message);
                 mLoadState = LoadState.ERROR;
-                onError?.Invoke(e.Message);
+                onError?.Invoke(this, e.Message);
                 yield break;
             }
             yield return null;
