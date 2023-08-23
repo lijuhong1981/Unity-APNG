@@ -20,6 +20,17 @@ public class APNGPlayer : MonoBehaviour
     }
 
     /// <summary>
+    /// Texture使用模式，单张或多张
+    /// 单张表示每帧动画都在一张Texture上绘制
+    /// 多张表示会为每帧动画单独创建一张Texture
+    /// </summary>
+    public enum TextureMode
+    {
+        SingleTexture,
+        MultiTexture,
+    }
+
+    /// <summary>
     /// 加载状态
     /// </summary>
     public enum LoadState
@@ -41,7 +52,7 @@ public class APNGPlayer : MonoBehaviour
         PAUSED,//暂停
     }
 
-    class APNGFrame
+    public class APNGFrame
     {
         //当前帧索引
         public int index;
@@ -62,8 +73,10 @@ public class APNGPlayer : MonoBehaviour
         public uint xOffset;
         //当前帧y方向像素偏移
         public uint yOffset;
+        //当前帧Texture
+        public Texture2D texture;
 
-        public APNGFrame clone()
+        public APNGFrame Clone()
         {
             var result = new APNGFrame();
             result.index = this.index;
@@ -76,6 +89,7 @@ public class APNGPlayer : MonoBehaviour
             result.height = this.height;
             result.xOffset = this.xOffset;
             result.yOffset = this.yOffset;
+            result.texture = this.texture;
             return result;
         }
     }
@@ -201,6 +215,8 @@ public class APNGPlayer : MonoBehaviour
     public string imagePath;
     [Tooltip("APNG图片来源")]
     public ImageSource imageSource;
+    [Tooltip("Texture使用模式")]
+    public TextureMode textureMode = TextureMode.MultiTexture;
     [Tooltip("指定APNG图像所需要赋值的Material")]
     public List<Material> materials = new List<Material>();
     [Tooltip("指定APNG图像所需要赋值的RawImage")]
@@ -212,6 +228,9 @@ public class APNGPlayer : MonoBehaviour
     [Tooltip("播放速度倍率")]
     [Min(0.1f)]
     public float playSpeed = 1.0f;
+    [Tooltip("动画循环播放次数，0表示无限制")]
+    [Min(0)]
+    public int maxLoopCount = 0;
 
     private LoadState mLoadState = LoadState.UNLOADED;
     public bool isUnloaded
@@ -263,7 +282,12 @@ public class APNGPlayer : MonoBehaviour
     }
     private APNGFrame mPrevFrame;
     private Texture2D mTexture;
+    [Obsolete]
     public Texture2D texture
+    {
+        get { return mTexture; }
+    }
+    public Texture2D currentTexture
     {
         get { return mTexture; }
     }
@@ -278,13 +302,17 @@ public class APNGPlayer : MonoBehaviour
     {
         get { return mFrames.Count; }
     }
+    private int mLoopCount = 0;
 
     public delegate void OnReady(APNGPlayer player);
 
     public delegate void OnError(APNGPlayer player, string error);
 
+    public delegate void OnChanged(APNGPlayer player, int frameIndex, APNGFrame frame);
+
     public event OnReady onReady;
     public event OnError onError;
+    public event OnChanged onChanged;
 
     // Start is called before the first frame update
     void Start()
@@ -482,6 +510,8 @@ public class APNGPlayer : MonoBehaviour
         mPlayState = PlayState.STOPED;
         //恢复至第一帧
         setCurrentFrameImpl(0);
+        //重置动画循环次数
+        mLoopCount = 0;
     }
 
     /// <summary>
@@ -497,6 +527,15 @@ public class APNGPlayer : MonoBehaviour
         if (isStoped || isPaused)
             return;
         mPlayState = PlayState.PAUSED;
+    }
+
+    /// <summary>
+    /// 重新开始播放
+    /// </summary>
+    public void Restart()
+    {
+        Stop();
+        Start();
     }
 
     //public void SetCurrentFrame(int index)
@@ -526,41 +565,59 @@ public class APNGPlayer : MonoBehaviour
             return;
         mCurrentFrameIndex = index;
         var frame = mFrames[index];
-        //第一帧
-        if (index == 0)
+        if (textureMode == TextureMode.SingleTexture || (textureMode == TextureMode.MultiTexture && frame.texture == null))
         {
-            //绘制第一帧前将动画整体区域清空
-            mImagePixels.Clear();
-            //置空上一帧
-            mPrevFrame = null;
-        }
-        //存在上一帧
-        if (mPrevFrame != null)
-        {
-            switch (mPrevFrame.disposeOp)
+            //第一帧
+            if (index == 0)
             {
-                case DisposeOps.APNGDisposeOpNone://不作处理，直接绘制
-                    break;
-                case DisposeOps.APNGDisposeOpBackground://清空上一帧区域
-                    mImagePixels.ClearRect(mPrevFrame.xOffset, mPrevFrame.yOffset, mPrevFrame.width, mPrevFrame.height);
-                    break;
-                case DisposeOps.APNGDisposeOpPrevious://恢复为上一帧绘制前的数据
-                    mImagePixels.SetPixels(mPrevFrame.pixels, mPrevFrame.xOffset, mPrevFrame.yOffset, mPrevFrame.width, mPrevFrame.height);
-                    break;
+                //绘制第一帧前将动画整体区域清空
+                mImagePixels.Clear();
+                //置空上一帧
+                mPrevFrame = null;
             }
+            //存在上一帧
+            if (mPrevFrame != null)
+            {
+                switch (mPrevFrame.disposeOp)
+                {
+                    case DisposeOps.APNGDisposeOpNone://不作处理，直接绘制
+                        break;
+                    case DisposeOps.APNGDisposeOpBackground://清空上一帧区域
+                        mImagePixels.ClearRect(mPrevFrame.xOffset, mPrevFrame.yOffset, mPrevFrame.width, mPrevFrame.height);
+                        break;
+                    case DisposeOps.APNGDisposeOpPrevious://恢复为上一帧绘制前的数据
+                        mImagePixels.SetPixels(mPrevFrame.pixels, mPrevFrame.xOffset, mPrevFrame.yOffset, mPrevFrame.width, mPrevFrame.height);
+                        break;
+                }
+            }
+            mPrevFrame = frame.Clone();
+            //存储当前的绘制数据，用于下一帧绘制前恢复该数据
+            if (mPrevFrame.disposeOp == DisposeOps.APNGDisposeOpPrevious)
+                mPrevFrame.pixels = mImagePixels.GetPixels(mPrevFrame.xOffset, mPrevFrame.yOffset, mPrevFrame.width, mPrevFrame.height);
+            //清空当前帧区域的数据
+            if (mPrevFrame.blendOp == BlendOps.APNGBlendOpSource)
+                mImagePixels.ClearRect(mPrevFrame.xOffset, mPrevFrame.yOffset, mPrevFrame.width, mPrevFrame.height);
+            //绘制当前帧
+            mImagePixels.SetPixels(frame.pixels, mPrevFrame.xOffset, mPrevFrame.yOffset, mPrevFrame.width, mPrevFrame.height);
+            if (textureMode == TextureMode.SingleTexture)
+            {
+                if (frame.texture == null)
+                    frame.texture = mTexture;
+            }
+            else if (textureMode == TextureMode.MultiTexture)
+            {
+                if (frame.texture == null)
+                    frame.texture = new Texture2D(mApng.IHDRChunk.Width, mApng.IHDRChunk.Height);
+                mTexture = frame.texture;
+            }
+            //将绘制好的数据设置给Texture
+            mTexture.SetPixels32(mImagePixels.pixels);
+            mTexture.Apply();
         }
-        mPrevFrame = frame.clone();
-        //存储当前的绘制数据，用于下一帧绘制前恢复该数据
-        if (mPrevFrame.disposeOp == DisposeOps.APNGDisposeOpPrevious)
-            mPrevFrame.pixels = mImagePixels.GetPixels(mPrevFrame.xOffset, mPrevFrame.yOffset, mPrevFrame.width, mPrevFrame.height);
-        //清空当前帧区域的数据
-        if (mPrevFrame.blendOp == BlendOps.APNGBlendOpSource)
-            mImagePixels.ClearRect(mPrevFrame.xOffset, mPrevFrame.yOffset, mPrevFrame.width, mPrevFrame.height);
-        //绘制当前帧
-        mImagePixels.SetPixels(frame.pixels, mPrevFrame.xOffset, mPrevFrame.yOffset, mPrevFrame.width, mPrevFrame.height);
-        //将绘制好的数据设置给Texture
-        mTexture.SetPixels32(mImagePixels.pixels);
-        mTexture.Apply();
+        else
+        {
+            mTexture = frame.texture;
+        }
         //为Material与RawImage赋值
         foreach (var material in materials)
         {
@@ -570,6 +627,8 @@ public class APNGPlayer : MonoBehaviour
         {
             rawImage.texture = mTexture;
         }
+
+        onChanged?.Invoke(this, index, frame);
     }
 
     //获取下一帧索引
@@ -577,14 +636,24 @@ public class APNGPlayer : MonoBehaviour
     {
         var index = mCurrentFrameIndex;
         index++;
+        //播放至最后一帧
         if (index >= framesNumber)
+        {
             index = 0;
+            mLoopCount++;
+        }
         return index;
     }
 
     //检查是否跳转下一帧
     private void checkNextFrame()
     {
+        //设置了最大循环次数且已循环次数超过最大次数，停止播放
+        if (maxLoopCount > 0 && mLoopCount >= maxLoopCount)
+        {
+            Stop();
+            return;
+        }
         var nowTime = Time.time;
         if (nowTime - mLastTime >= mFrames[mCurrentFrameIndex].duration / playSpeed)
         {
